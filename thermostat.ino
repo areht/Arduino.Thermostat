@@ -43,7 +43,7 @@ Adafruit_ST7735 adafruit = Adafruit_ST7735(TFT_CS,  TFT_DC, TFT_RST);
 
 #define PUMP_PIN 5
 #define HEATER_PIN 4
-#define BUZZ_PIN 3
+#define BUZZ_PIN 6
 
 // Data wire is plugged into port 2 on the Arduino
 #define ONE_WIRE_BUS 2
@@ -63,6 +63,9 @@ DeviceAddress deviceAddress; // We'll use this variable to store a found device 
 
 int MinTempValue = 0;
 int MaxTempValue = 0x07D0;
+
+#define targetTemp 57.0
+#define targetTempSum (float)targetTemp*3
 
 #define numberOfDevices 3
 
@@ -134,16 +137,14 @@ Task UpdateTempTask(1000, UpdateTemp);
 Task UpdatePumpTask(1000, UpdatePump);
 Task PumpTask(5000, Pump);
 Task UpdateHeaterTask(1000, UpdateHeater);
-#define AlarmTimer 90000
-Task AlarmTask(AlarmTimer, Alarm);
-TonePlayer tonePlayer(BUZZ_PIN, 200);
+#define AlarmTimer 900
+DelayRun AlarmTask(900000, Alarm);
 
 void setup(void)
 {
   MaxTempValue = 0x0550;
   MinTempValue = 0x00FF;
 //  pinMode(13, OUTPUT);
-  pinMode(BUZZ_PIN, OUTPUT);
   pinMode(PUMP_PIN, OUTPUT);
   pinMode(HEATER_PIN, OUTPUT);
   initDusplay();
@@ -211,7 +212,7 @@ void setup(void)
   SoftTimer.add(&UpdatePumpTask);
   SoftTimer.add(&UpdateHeaterTask);
   SoftTimer.add(&UpdateViewTask);
-  SoftTimer.add(&AlarmTask);
+  AlarmTask.startDelayed();
   cls();
 }
 
@@ -313,9 +314,10 @@ int lastRequests = 0;
 void UpdateTemp(Task* me)
 {
   adafruit.setCursor(50, 0);
-  logger(millis() / 1000);
+  int now = millis()/1000;
+  logger(now);
   adafruit.setCursor(50, fontHeight);
-  logger(AlarmTimer - millis() / 1000);
+  logger(AlarmTimer - now);
   
   adafruit.setCursor(0, 0);  
   // call sensors.requestTemperatures() to issue a global temperature
@@ -367,24 +369,36 @@ void UpdateView(Task* me)
 int isHeaterEnabled = LOW;
 void UpdateHeater(Task* me)
 {
+  adafruit.setCursor(50, fontHeight*2);  
   int shouldHeat = LOW;
+  float valueC = 0.0;
   int i = 0;
   for (; i < numberOfDevices; i++)
   {
-    int value = measurements.valueAt(maxMeasurements, i);
-    if (toC(value) < 30.0)
-      shouldHeat = HIGH;
+    int current = measurements.valueAt(maxMeasurements, i);
+    float currentC = toC(current);
+    if (currentC < 10 || currentC > 75)
+    {
+      isHeaterEnabled = LOW;
+      logger("HeatError", isHeaterEnabled);      
+      Alarm(&AlarmTask);
+      return;
+    }
+    valueC += currentC;
   } 
+//  logger(valueC);
+//  logger(targetTempSum);  
+  if (valueC < targetTemp*numberOfDevices)
+    shouldHeat = HIGH;  
   isHeaterEnabled = shouldHeat;  
   digitalWrite(HEATER_PIN, isHeaterEnabled);
-  adafruit.setCursor(50, fontHeight*2);
-  logger("HEATER is ", isHeaterEnabled);
+  logger("HEATER is ", isHeaterEnabled);  
 }
 
 int isPumpEnabled = LOW;
 void UpdatePump(Task* me)
 {
-  isPumpEnabled = LOW;
+  isPumpEnabled = isHeaterEnabled;
   int sum = 0;
   int i = 0;
   for (; i < numberOfDevices; i++)
@@ -397,11 +411,11 @@ void UpdatePump(Task* me)
   for (; i < numberOfDevices; i++)
   {
     int value = measurements.valueAt(maxMeasurements, i);
-    if (toC(sum - value*numberOfDevices) > 0.2)
+    if (sum - value*numberOfDevices > 1)
     {
       adafruit.setCursor(50, fontHeight*3);
-      logger("PUMP is ", isPumpEnabled);
       isPumpEnabled = HIGH;
+      logger("PUMP is ", isPumpEnabled);
     }
   } 
   SoftTimer.add(&PumpTask);
@@ -415,9 +429,11 @@ void Pump(Task* me)
   logger("PUMP is ", isPumpEnabled);
 }
 
-void Alarm(Task* me)
+boolean Alarm(Task* me)
 {
-  tonePlayer.play("c1g1c1g1j2j2c1g1c1g1j2j2o1n1l1j1h2l2_2j1h1g1e1c2c2");
+  pinMode(BUZZ_PIN, OUTPUT);  
+  analogWrite(BUZZ_PIN, 128);
+  return true;
 }
 
 void GetProbe(uint8_t address[8], int n)
