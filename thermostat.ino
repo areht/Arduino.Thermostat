@@ -1,3 +1,14 @@
+//#include <BlinkTas  k.h>
+#include <Debouncer.h>
+#include <DelayRun.h>
+#include <Dimmer.h>
+#include <FrequencyTask.h>
+#include <Heartbeat.h>
+#include <SoftPwmTask.h>
+#include <SoftTimer.h>
+#include <Task.h>
+#include <TonePlayer.h>
+
 #include <avr/wdt.h>        // Include this to handle watchdog timer
 
 #include <OneWire.h>
@@ -14,7 +25,7 @@
 // For the breakout, you can use any 2 or 3 pins
 // These pins will also work for the 1.8" TFT shield
 #define TFT_CS     10
-#define TFT_RST    0  // you can also connect this to the Arduino reset
+#define TFT_RST    8  // you can also connect this to the Arduino reset
 // in which case, set this #define pin to 0!
 #define TFT_DC     9
 
@@ -30,12 +41,16 @@ Adafruit_ST7735 adafruit = Adafruit_ST7735(TFT_CS,  TFT_DC, TFT_RST);
 #define TFT_MOSI 11   // set these to be whatever pins you like!
 //Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 
-
+#define PUMP_PIN 5
+#define HEATER_PIN 4
+#define BUZZ_PIN 3
 
 // Data wire is plugged into port 2 on the Arduino
 #define ONE_WIRE_BUS 2
 #define TEMPERATURE_PRECISION 12
 #define TEMPERATURE_UNIT 0.0625
+
+#define fontHeight 8
 
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
@@ -114,11 +129,23 @@ int colors[numberOfDevices + 1] = {
   ST7735_WHITE
 };
 
+Task UpdateViewTask(200, UpdateView);
+Task UpdateTempTask(1000, UpdateTemp);
+Task UpdatePumpTask(1000, UpdatePump);
+Task PumpTask(5000, Pump);
+Task UpdateHeaterTask(1000, UpdateHeater);
+#define AlarmTimer 90000
+Task AlarmTask(AlarmTimer, Alarm);
+TonePlayer tonePlayer(BUZZ_PIN, 200);
+
 void setup(void)
 {
   MaxTempValue = 0x0550;
   MinTempValue = 0x00FF;
-  pinMode(13, OUTPUT);
+//  pinMode(13, OUTPUT);
+  pinMode(BUZZ_PIN, OUTPUT);
+  pinMode(PUMP_PIN, OUTPUT);
+  pinMode(HEATER_PIN, OUTPUT);
   initDusplay();
 
   SerialBegin();
@@ -179,8 +206,16 @@ void setup(void)
       SerialPrint(" but could not detect address. Check power and cabling");
     }
   }
+  
+  SoftTimer.add(&UpdateTempTask);
+  SoftTimer.add(&UpdatePumpTask);
+  SoftTimer.add(&UpdateHeaterTask);
+  SoftTimer.add(&UpdateViewTask);
+  SoftTimer.add(&AlarmTask);
   cls();
 }
+
+byte value = 0;
 
 uint8_t scratchPad[9];
 int getTemp(DeviceAddress deviceAddress)
@@ -201,7 +236,6 @@ void initDusplay() {
   adafruit.initR(INITR_BLACKTAB);
   adafruit.fillScreen(ST7735_BLACK);
   adafruit.setCursor(0, 0);
-  //  testdrawtext("Dallas Temperature IC Control Library Demo ", ST7735_WHITE);
 }
 
 char buf[10];
@@ -276,22 +310,25 @@ void printTemperature(long i, int tempC)
 }
 
 int lastRequests = 0;
-void loop(void)
+void UpdateTemp(Task* me)
 {
-  adafruit.setCursor(0, 0); 
+  adafruit.setCursor(50, 0);
   logger(millis() / 1000);
+  adafruit.setCursor(50, fontHeight);
+  logger(AlarmTimer - millis() / 1000);
+  
+  adafruit.setCursor(0, 0);  
   // call sensors.requestTemperatures() to issue a global temperature
   // request to all devices on the bus
   int mils = millis();
   //  if (lastRequests + 750 < mils)
   {
-    digitalWrite(13, HIGH);
     SerialPrint("Requesting temperatures...");
     lastRequests = mils;
     sensors.requestTemperatures(); // Send the command to get temperatures
     SerialPrint("DONE in ");
     mils = millis() - mils;
-    logger("DONE in ", mils);
+//    logger("DONE in ", mils);
     SerialPrintln(mils);
     //} else {
     // digitalWrite(13, LOW);
@@ -319,8 +356,68 @@ void loop(void)
     }
     //else ghost device! Check your power requirements and cabling
   }
+//  plot.DrawTemperature();
+}
+
+void UpdateView(Task* me)
+{
   plot.DrawTemperature();
-  delay(250);
+}
+
+int isHeaterEnabled = LOW;
+void UpdateHeater(Task* me)
+{
+  int shouldHeat = LOW;
+  int i = 0;
+  for (; i < numberOfDevices; i++)
+  {
+    int value = measurements.valueAt(maxMeasurements, i);
+    if (toC(value) < 30.0)
+      shouldHeat = HIGH;
+  } 
+  isHeaterEnabled = shouldHeat;  
+  digitalWrite(HEATER_PIN, isHeaterEnabled);
+  adafruit.setCursor(50, fontHeight*2);
+  logger("HEATER is ", isHeaterEnabled);
+}
+
+int isPumpEnabled = LOW;
+void UpdatePump(Task* me)
+{
+  isPumpEnabled = LOW;
+  int sum = 0;
+  int i = 0;
+  for (; i < numberOfDevices; i++)
+  {
+    int value = measurements.valueAt(maxMeasurements, i);
+    sum += value;
+  }
+
+  i = 0;
+  for (; i < numberOfDevices; i++)
+  {
+    int value = measurements.valueAt(maxMeasurements, i);
+    if (toC(sum - value*numberOfDevices) > 0.2)
+    {
+      adafruit.setCursor(50, fontHeight*3);
+      logger("PUMP is ", isPumpEnabled);
+      isPumpEnabled = HIGH;
+    }
+  } 
+  SoftTimer.add(&PumpTask);
+}
+
+void Pump(Task* me)
+{
+//  isPumpEnabled = isHeaterEnabled;
+  digitalWrite(PUMP_PIN, isPumpEnabled);
+  adafruit.setCursor(50, fontHeight*3);
+  logger("PUMP is ", isPumpEnabled);
+}
+
+void Alarm(Task* me)
+{
+  tonePlayer.play("c1g1c1g1j2j2c1g1c1g1j2j2o1n1l1j1h2l2_2j1h1g1e1c2c2");
 }
 
 void GetProbe(uint8_t address[8], int n)
