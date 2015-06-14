@@ -1,2 +1,2 @@
-# Arduiono.Thermostat
-Arduiono.Thermostat
+# Arduino.Thermostat
+Arduino.Thermostat
