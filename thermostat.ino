@@ -125,6 +125,9 @@ class Matrix2 : public Matrix
 Matrix2 measurements;
 Plot plot(numberOfDevices, maxMeasurements, &adafruit, &measurements);
 
+#define	ST7735_GRAY 0x7AEF
+
+
 int colors[numberOfDevices + 1] = {
   ST7735_RED,
   ST7735_GREEN,
@@ -250,7 +253,7 @@ void logger(unsigned long value) {
 }
 void logger(char *text, int value) {
   dtostrf(value, 0, 0, buf);
-  testdrawtext(text, ST7735_WHITE);
+  testdrawtext(text);
   logger(buf);
 }
 void logger(int value) {
@@ -258,16 +261,16 @@ void logger(int value) {
   logger(buf);
 }
 void logger(char *text) {
-  testdrawtext(text, ST7735_WHITE);
-  testdrawtext("\n", ST7735_WHITE);
+  testdrawtext(text);
+  testdrawtext("\n");
 }
 
 
-void testdrawtext(char *text, uint16_t color) {
+void testdrawtext(char *text) {
   //  adafruit.setCursor(0, 0);
-  adafruit.setTextColor(color, ST7735_BLACK);
   adafruit.setTextWrap(true);
   adafruit.print(text);
+  adafruit.setTextColor(ST7735_WHITE, ST7735_BLACK);  
 }
 
 void cls() {
@@ -306,6 +309,7 @@ void printTemperature(long i, int tempC)
   SerialPrint(i, DEC);
   SerialPrint("Temp C: ");
   SerialPrintln(toC(tempC));
+  adafruit.setTextColor(colors[i]);  
   logger(toC(tempC));
   LogTemperature(i, tempC);
 }
@@ -392,7 +396,8 @@ void UpdateHeater(Task* me)
     shouldHeat = HIGH;  
   isHeaterEnabled = shouldHeat;  
   digitalWrite(HEATER_PIN, isHeaterEnabled);
-  logger("HEATER is ", isHeaterEnabled);  
+  adafruit.setTextColor(ST7735_GREEN);
+  logger("HEATER is ", isHeaterEnabled);
 }
 
 int isPumpEnabled = LOW;
@@ -415,6 +420,14 @@ void UpdatePump(Task* me)
     {
       adafruit.setCursor(50, fontHeight*3);
       isPumpEnabled = HIGH;
+      if (isPumpEnabled)
+      {      
+        adafruit.setTextColor(ST7735_GREEN, ST7735_BLACK);  
+      }
+      else
+      {
+        adafruit.setTextColor(ST7735_GRAY, ST7735_BLACK);  
+      }
       logger("PUMP is ", isPumpEnabled);
     }
   } 
