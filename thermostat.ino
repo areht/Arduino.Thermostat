@@ -92,8 +92,8 @@ class Matrix2 : public Matrix
         delay(10000);        
       }
         return values[x][y];
-
     }
+    
     float labelAt (int x, int y) {
       return toC(valueAt(x,y));
     }
@@ -101,20 +101,114 @@ class Matrix2 : public Matrix
     int SetValue(int x, int y, int value) {
       if (y > numberOfDevices)
       {
-        logger("y get overflow");
-        logger(y);
+        logger("y get overflow", y);
         delay(10000);        
       }
       if (x > maxMeasurements)
       {
-        logger("x get overflow");
-        logger(x);
+        logger("x get overflow", x);
         delay(10000);
       }
       values[x][y] = value;
+    }    
+    
+    void PushValue(long num, int tempC)
+    {
+      Shift(num, maxMeasurements, tempC);
     }
     
+    void Shift(long num, int i, int tempC)
+    {
+      if (i != 0)
+      {
+        Shift(num, i - 1, valueAt(i,num));
+      }
+      else
+      {
+      }
+      SetValue(i,num,tempC);
+    }
 };
+
+struct TailedValues {
+   int Value;  
+//   byte Begin;
+   byte Count;
+};
+
+class SquashedMatrixRow 
+{
+#define SquashedBoolMatrixMaxMeasurements 10
+  
+  TailedValues values[SquashedBoolMatrixMaxMeasurements + 1];
+  int LastValue;
+  public:
+    int valueAt (int x) {
+      if (x > maxMeasurements)
+      {
+        return 0;
+      }
+      
+      return values[x].Value;
+    }
+    
+    float labelAt (int x) {
+      return valueAt(x);
+    }
+       
+    void PushValue(int tempC)
+    {
+      if (LastValue == tempC) 
+      {
+        values[SquashedBoolMatrixMaxMeasurements].Count++;
+      }
+      
+      TailedValues* newValue = new TailedValues();
+      newValue->Value = tempC;
+      newValue->Count = 1;
+      Shift(SquashedBoolMatrixMaxMeasurements, newValue);
+    }    
+   
+    void Shift(int i, TailedValues* tempC)
+    {
+      if (i != 0)
+      {
+        Shift(i - 1, &values[i]);
+      }
+      else
+      {
+      }
+      values[0] = *tempC;
+    }
+};
+
+class MatrixCombine : public Matrix
+{  
+  SquashedMatrixRow squashedMatrix;
+  Matrix2 measurements;
+
+  public:  
+    int valueAt (int x, int y) {
+      if (y = (numberOfDevices+1))      
+      {
+          squashedMatrix.valueAt(x);
+      }
+      return measurements.valueAt(x, y);
+    }
+    
+    float labelAt (int x, int y) {
+      return toC(valueAt(x,y));
+    }
+    
+    void PushValue(int y, int value) {
+      if (y = (numberOfDevices+1))      
+      {
+          squashedMatrix.PushValue(value);
+      }
+      measurements.PushValue(y, value);
+    }    
+};
+
 
     float toC(int16_t rawTemperature)
     {
@@ -122,17 +216,20 @@ class Matrix2 : public Matrix
     }
 
 
-Matrix2 measurements;
-Plot plot(numberOfDevices, maxMeasurements, &adafruit, &measurements);
+MatrixCombine measurements;
+Plot plot(numberOfDevices+1, maxMeasurements, &adafruit, &measurements);
 
 #define	ST7735_GRAY 0x7AEF
 
 
-int colors[numberOfDevices + 1] = {
+int colors[numberOfDevices + 4] = {
   ST7735_RED,
   ST7735_GREEN,
   ST7735_BLUE,
-  ST7735_WHITE
+  ST7735_WHITE,
+  ST7735_CYAN,
+  ST7735_MAGENTA,
+  ST7735_YELLOW
 };
 
 Task UpdateViewTask(200, UpdateView);
@@ -285,22 +382,7 @@ void LogTemperature(byte num, int tempC)
   SerialPrint("Added: ");
   SerialPrintln(tempC);
 
-  LogTemperature(num, maxMeasurements, tempC);
-}
-
-void LogTemperature(long num, int i, int tempC)
-{
-  if (i != 0)
-  {
-    LogTemperature(num, i - 1, measurements.valueAt(i,num));
-  }
-  else
-  {
-  }
-  //    SerialPrintln();
-  //    SerialPrint("Add: ");
-  //    SerialPrint(tempC);
-  measurements.SetValue(i,num,tempC);
+  measurements.PushValue(num, tempC);
 }
 
 void printTemperature(long i, int tempC)
