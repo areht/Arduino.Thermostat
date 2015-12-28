@@ -52,6 +52,9 @@ Adafruit_ST7735 adafruit = Adafruit_ST7735(TFT_CS,  TFT_DC, TFT_RST);
 
 #define fontHeight 8
 
+#define CURRENT_SENSOR A7 // Analog input pin that sensor is attached to
+float effective_current;       //effective current 
+
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
 
@@ -134,6 +137,7 @@ int colors[numberOfDevices + 1] = {
 
 Task UpdateViewTask(200, UpdateView);
 Task UpdateTempTask(1000, UpdateTemp);
+Task UpdateAmpTask(1000, UpdateAmp);
 Task UpdatePumpTask(1000, UpdatePump);
 Task PumpTask(5000, Pump);
 Task UpdateHeaterTask(1000, UpdateHeater);
@@ -147,6 +151,7 @@ void setup(void)
 //  pinMode(13, OUTPUT);
   pinMode(PUMP_PIN, OUTPUT);
   pinMode(HEATER_PIN, OUTPUT);
+  pinMode(CURRENT_SENSOR, INPUT);
   initDusplay();
 
   SerialBegin();
@@ -163,13 +168,13 @@ void setup(void)
   // Grab a count of devices on the wire
   int realNumberOfDevices = sensors.getDeviceCount();
   SerialPrint("Found ");
-  SerialPrint(numberOfDevices, DEC);
+  SerialPrint(realNumberOfDevices, DEC);
   SerialPrintln(" devices.");
-  if (numberOfDevices != realNumberOfDevices)
-  {
-    SerialPrintln("Miscount. Reset.");
-    reset();
-  }
+//  if (numberOfDevices != realNumberOfDevices)
+//  {
+//    SerialPrintln("Miscount. Reset.");
+//    reset();
+//  }
 
   // Loop through each device, print out address
   for (int i = 0; i < numberOfDevices  ; i++)
@@ -209,6 +214,7 @@ void setup(void)
   }
   
   SoftTimer.add(&UpdateTempTask);
+  SoftTimer.add(&UpdateAmpTask);  
   SoftTimer.add(&UpdatePumpTask);
   SoftTimer.add(&UpdateHeaterTask);
   SoftTimer.add(&UpdateViewTask);
@@ -240,10 +246,18 @@ void initDusplay() {
 }
 
 char buf[10];
-void logger(float value) {
+void logger(float value, char *text) {
   dtostrf(value, 4, 3, buf);
+  testdrawtext(buf, ST7735_WHITE);  
+  logger(text);
+}
+
+void logger(char *text, float value) {
+  dtostrf(value, 4, 3, buf);
+  testdrawtext(text, ST7735_WHITE);  
   logger(buf);
 }
+
 void logger(unsigned long value) {
   dtostrf(value, 0, 0, buf);
   logger(buf);
@@ -262,7 +276,6 @@ void logger(char *text) {
   testdrawtext("\n", ST7735_WHITE);
 }
 
-
 void testdrawtext(char *text, uint16_t color) {
   //  adafruit.setCursor(0, 0);
   adafruit.setTextColor(color, ST7735_BLACK);
@@ -274,8 +287,6 @@ void cls() {
   adafruit.fillScreen(ST7735_BLACK);
   adafruit.setCursor(0, 0);
 }
-
-
 
 void LogTemperature(byte num, int tempC)
 {
@@ -306,7 +317,7 @@ void printTemperature(long i, int tempC)
   SerialPrint(i, DEC);
   SerialPrint("Temp C: ");
   SerialPrintln(toC(tempC));
-  logger(toC(tempC));
+  logger("", toC(tempC));
   LogTemperature(i, tempC);
 }
 
@@ -361,16 +372,57 @@ void UpdateTemp(Task* me)
 //  plot.DrawTemperature();
 }
 
+void UpdateAmp(Task* me)
+{
+    adafruit.setCursor(0, fontHeight* (numberOfDevices));
+
+    int sensorValue;             //value read from the sensor
+    int sensorMax = 0;
+    int sensorMin = 32000;
+    int i = 0;
+    uint32_t start_time = millis();
+    while((millis()-start_time) < 50)//sample for 50ms
+    {
+        sensorValue = analogRead(CURRENT_SENSOR);
+        if (sensorValue > sensorMax) 
+        {
+            /*record the maximum sensor value*/
+            sensorMax = sensorValue;
+        }
+        
+        if (sensorValue < sensorMin) 
+        {
+            sensorMin = sensorValue;
+        }        
+    }
+    logger("m", sensorMin);
+    logger("M", sensorMax);
+
+    if (sign(sensorMax) != sign(sensorMin))
+    {
+      effective_current=(float)(sensorMax-sensorMin)*50/4096/1.414  ;// for 20A mode,you need to modify this with 5 A and 30A mode;     
+
+      logger(effective_current, "~A");
+    } 
+    
+    effective_current=((float)abs(sensorMax+sensorMin-1022))*50/2048  ;// for 20A mode,you need to modify this with 5 A and 30A mode;     
+    logger(effective_current, "A");
+}
+
+int sign(int x) { return (x>511) - (x<511); }
+
 void UpdateView(Task* me)
 {
   plot.DrawTemperature();
 }
 
-int isHeaterEnabled = LOW;
+bool isHeaterEnabled = false;
 void UpdateHeater(Task* me)
 {
+  bool wasHeaterEnabled = isHeaterEnabled;
+  
   adafruit.setCursor(50, fontHeight*2);  
-  int shouldHeat = LOW;
+  bool shouldHeat = false;
   float valueC = 0.0;
   int i = 0;
   for (; i < numberOfDevices; i++)
@@ -379,7 +431,7 @@ void UpdateHeater(Task* me)
     float currentC = toC(current);
     if (currentC < 10 || currentC > 75)
     {
-      isHeaterEnabled = LOW;
+      isHeaterEnabled = false;
       logger("HeatError", isHeaterEnabled);      
       Alarm(&AlarmTask);
       return;
@@ -389,13 +441,21 @@ void UpdateHeater(Task* me)
 //  logger(valueC);
 //  logger(targetTempSum);  
   if (valueC < targetTemp*numberOfDevices)
-    shouldHeat = HIGH;  
+    shouldHeat = true;  
+    
+  if (wasHeaterEnabled)
+  {
+    if (valueC < (targetTemp-2)*numberOfDevices)// скважность при 2-х градусах
+    shouldHeat = false;  
+  }    
+
   isHeaterEnabled = shouldHeat;  
-  digitalWrite(HEATER_PIN, isHeaterEnabled);
+    
+  digitalWrite(HEATER_PIN, isHeaterEnabled ? HIGH : LOW);
   logger("HEATER is ", isHeaterEnabled);  
 }
 
-int isPumpEnabled = LOW;
+bool isPumpEnabled = false;
 void UpdatePump(Task* me)
 {
   isPumpEnabled = isHeaterEnabled;
@@ -424,7 +484,7 @@ void UpdatePump(Task* me)
 void Pump(Task* me)
 {
 //  isPumpEnabled = isHeaterEnabled;
-  digitalWrite(PUMP_PIN, isPumpEnabled);
+  digitalWrite(PUMP_PIN, isPumpEnabled ? HIGH : LOW);
   adafruit.setCursor(50, fontHeight*3);
   logger("PUMP is ", isPumpEnabled);
 }
